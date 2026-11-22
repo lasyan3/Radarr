@@ -161,7 +161,7 @@ namespace NzbDrone.Common.Disk
             });
         }
 
-        public IEnumerable<string> GetFiles(string path, bool recursive)
+        public IEnumerable<string> GetFiles(string path, bool recursive, bool ignoreLinks = false)
         {
             Ensure.That(path, () => path).IsValidPath(PathValidationType.CurrentOs);
 
@@ -170,7 +170,8 @@ namespace NzbDrone.Common.Disk
                 AttributesToSkip = FileAttributes.System,
                 RecurseSubdirectories = recursive,
                 IgnoreInaccessible = true
-            });
+            })
+            .Where(file => !ignoreLinks || new FileInfo(file).LinkTarget == null);
         }
 
         public long GetFolderSize(string path)

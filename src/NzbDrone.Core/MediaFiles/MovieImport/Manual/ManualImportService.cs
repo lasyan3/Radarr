@@ -224,7 +224,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
                 // It will lead to some extra directories being checked for files, but it saves the processing of them and is cleaner than
                 // teaching FilterPaths to know whether it's processing a file or a folder and changing it's filtering based on that.
                 // If the movie is unknown for the directory and there are more than 100 files in the folder don't process the items before returning.
-                var files = _diskScanService.FilterPaths(rootFolder, _diskScanService.GetVideoFiles(baseFolder, false));
+                var files = _diskScanService.FilterPaths(rootFolder, _diskScanService.GetVideoFiles(baseFolder, false, ignoreLinks: true));
 
                 if (files.Count > 100)
                 {
@@ -242,7 +242,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
             }
 
             var folderInfo = Parser.Parser.ParseMovieTitle(directoryInfo.Name);
-            var movieFiles = _diskScanService.FilterPaths(rootFolder, _diskScanService.GetVideoFiles(baseFolder).ToList());
+            var movieFiles = _diskScanService.FilterPaths(rootFolder, _diskScanService.GetVideoFiles(baseFolder, ignoreLinks: true).ToList());
             var decisions = _importDecisionMaker.GetImportDecisions(movieFiles, movie, downloadClientItem, folderInfo, SceneSource(movie, baseFolder), filterExistingFiles);
 
             return decisions.Select(decision => MapItem(decision, rootFolder, downloadId, directoryInfo.Name)).ToList();

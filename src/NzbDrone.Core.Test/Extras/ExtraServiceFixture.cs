@@ -113,7 +113,7 @@ namespace NzbDrone.Core.Test.Extras
                 WithExistingFile(file);
             }
 
-            Mocker.GetMock<IDiskProvider>().Setup(s => s.GetFiles(_releaseFolder, It.IsAny<bool>()))
+            Mocker.GetMock<IDiskProvider>().Setup(s => s.GetFiles(_releaseFolder, It.IsAny<bool>(), It.IsAny<bool>()))
                   .Returns(files.ToArray());
         }
 
@@ -216,8 +216,8 @@ namespace NzbDrone.Core.Test.Extras
 
             Subject.ImportMovie(_localMovie, _movieFile, true);
 
-            Mocker.GetMock<IDiskProvider>().Verify(v => v.GetFiles(_releaseFolder, true), Times.Once);
-            Mocker.GetMock<IDiskProvider>().Verify(v => v.GetFiles(_releaseFolder, false), Times.Never);
+            Mocker.GetMock<IDiskProvider>().Verify(v => v.GetFiles(_releaseFolder, true, It.IsAny<bool>()), Times.Once);
+            Mocker.GetMock<IDiskProvider>().Verify(v => v.GetFiles(_releaseFolder, false, It.IsAny<bool>()), Times.Never);
         }
 
         [Test]
@@ -237,8 +237,8 @@ namespace NzbDrone.Core.Test.Extras
 
             Subject.ImportMovie(_localMovie, _movieFile, true);
 
-            Mocker.GetMock<IDiskProvider>().Verify(v => v.GetFiles(_releaseFolder, true), Times.Never);
-            Mocker.GetMock<IDiskProvider>().Verify(v => v.GetFiles(_releaseFolder, false), Times.Once);
+            Mocker.GetMock<IDiskProvider>().Verify(v => v.GetFiles(_releaseFolder, true, It.IsAny<bool>()), Times.Never);
+            Mocker.GetMock<IDiskProvider>().Verify(v => v.GetFiles(_releaseFolder, false, It.IsAny<bool>()), Times.Once);
         }
     }
 }
