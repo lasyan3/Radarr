@@ -1,0 +1,170 @@
+name: Docker (lasyan3)
+
+# Pas de déclenchement sur push : un commit direct sur develop ne lance rien.
+# PR ouverte/mise à jour : build seul pour la valider.
+# PR fusionnée : build du commit de fusion, publication de l'image et déploiement.
+on:
+  pull_request:
+    branches:
+      - develop
+    types: [opened, synchronize, reopened, closed]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Mettre à jour le conteneur sur Unraid"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/lasyan3/radarr
+
+jobs:
+  build:
+    # Une PR fermée sans être fusionnée ne lance rien
+    if: github.event.action != 'closed' || github.event.pull_request.merged
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out Radarr
+        uses: actions/checkout@v5
+        with:
+          path: Radarr
+          # PR fusionnée : le commit de fusion arrivé sur develop (sinon la ref par défaut)
+          ref: ${{ github.event.pull_request.merged && github.event.pull_request.merge_commit_sha || '' }}
+          # Historique complet pour retrouver la version officielle incluse dans la branche
+          fetch-depth: 0
+
+      - name: Check out linuxserver/docker-radarr
+        uses: actions/checkout@v5
+        with:
+          repository: linuxserver/docker-radarr
+          ref: master
+          path: docker-radarr
+          sparse-checkout: root
+
+      - name: Compute version
+        id: version
+        env:
+          # Branche cible (develop) aussi pour une PR ouverte : l'étape de compilation reçoit les mêmes
+          # arguments qu'à la fusion, qui réutilise donc la compilation de la PR depuis le cache
+          SOURCE_BRANCH: ${{ github.base_ref || github.ref_name }}
+        run: |
+          # Radarr détecte les mises à jour en comparant sa version à la dernière officielle :
+          # il faut donc la version officielle exacte sur laquelle la branche est basée (ex. 7.0.3.10918).
+          # Le fork n'a pas les tags, on les récupère depuis Radarr/Radarr.
+          MAJOR=$(sed -n "s/^  majorVersion: *'\\(.*\\)'.*/\\1/p" Radarr/azure-pipelines.yml | head -1)
+          git -C Radarr fetch --quiet --no-tags https://github.com/Radarr/Radarr.git "refs/tags/v*:refs/tags/v*"
+          UPSTREAM=$(git -C Radarr tag --merged HEAD --list "v${MAJOR}.*" --sort=-v:refname | head -1)
+          # majorVersion peut avoir été relevé avant le premier tag de cette série
+          if [ -z "$UPSTREAM" ]; then
+            UPSTREAM=$(git -C Radarr tag --merged HEAD --list "v*" --sort=-v:refname | head -1)
+          fi
+          if [ -z "$UPSTREAM" ]; then
+            echo "::error::Aucune version officielle v* trouvée dans l'historique"
+            exit 1
+          fi
+          UPSTREAM=${UPSTREAM#v}
+          # Version de l'assembly (lue par Radarr) : identique à l'officielle
+          echo "radarr_version=${UPSTREAM}" >> "$GITHUB_OUTPUT"
+          # Version du paquet et tag de l'image : distingue chaque build du fork
+          echo "version=${UPSTREAM}-lasyan3.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          # Sans "/" qui casse le sed de build.sh
+          echo "branch=${SOURCE_BRANCH//\//-}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Aussi pour une PR ouverte : son build écrit le cache dans le registre
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=sha
+
+      # Persiste les cache mounts NuGet / yarn du Dockerfile entre les runs
+      - name: Cache NuGet / yarn
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            nuget-cache
+            yarn-cache
+          key: buildkit-mounts-${{ hashFiles('Radarr/yarn.lock', 'Radarr/src/**/*.csproj', 'Radarr/src/Directory.*.props') }}
+          restore-keys: buildkit-mounts-
+
+      - uses: reproducible-containers/buildkit-cache-dance@v3
+        with:
+          cache-map: |
+            {
+              "nuget-cache": "/root/.nuget/packages",
+              "yarn-cache": "/usr/local/share/.cache/yarn"
+            }
+          skip-extraction: ${{ steps.cache.outputs.cache-hit }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Radarr/.github/docker/Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' || github.event.pull_request.merged }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            RADARRVERSION=${{ steps.version.outputs.radarr_version }}
+            BUILD_SOURCEBRANCHNAME=${{ steps.version.outputs.branch }}
+            VERSION=${{ steps.version.outputs.version }}
+            BUILD_DATE=${{ steps.version.outputs.build_date }}
+          # Couches (compilation comprise) réutilisées d'un run à l'autre. Cache dans le registre
+          # plutôt que type=gha, rangé par ref : le build de fusion ne voit pas le cache de la PR.
+          # Un échec d'écriture du cache ne fait pas échouer le build.
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
+
+  deploy:
+    needs: build
+    if: github.event.pull_request.merged || inputs.deploy
+    runs-on: [self-hosted, unraid]
+    permissions:
+      packages: read
+    env:
+      CONTAINER: ${{ vars.UNRAID_CONTAINER || 'radarr' }}
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull image
+        run: docker pull "$IMAGE:latest"
+
+      # Recrée le conteneur avec sa config actuelle (ports, volumes, labels Unraid)
+      # sur la nouvelle image, comme le "Force update" d'Unraid
+      - name: Recreate container
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            nickfedor/watchtower:latest \
+            --run-once --no-pull --cleanup "$CONTAINER"
+
+      - name: Check
+        run: |
+          docker inspect -f '{{.Config.Image}} {{.State.Status}} {{.Created}}' "$CONTAINER"
+          echo "Déployé : ${{ needs.build.outputs.version }}"

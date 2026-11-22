@@ -1,0 +1,9 @@
+# Allège le contexte envoyé à BuildKit (surtout en local)
+**/.git
+Radarr/node_modules
+Radarr/_output
+Radarr/_artifacts
+Radarr/_temp
+Radarr/_tests
+Radarr/src/**/bin
+Radarr/src/**/obj
